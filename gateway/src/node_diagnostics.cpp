@@ -191,6 +191,14 @@ void node_diag_mark_seen(uint8_t node_id, uint8_t bus_id) {
         publish_node_ha_status(node_id, true);
     }
 
+    if (client.connected()) {
+        char q_topic[56];
+        char q_val[8];
+        snprintf_P(q_topic, sizeof(q_topic), PSTR("%s/node/%u/quality"), config.mqtt_client_id, node_id);
+        snprintf_P(q_val, sizeof(q_val), PSTR("%u"), remote_nodes[node_id].quality);
+        client.publish(q_topic, q_val, true);
+    }
+
     // Se non abbiamo ancora la temperatura di questo nodo, richiedila subito!
     if (!remote_nodes[node_id].has_temp) {
         pjon_send_temp_req(node_id);

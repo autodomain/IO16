@@ -28,7 +28,7 @@ void ha_discovery_publish_node(uint8_t node_id) {
     client.publish(tbuf, j_node_status, true);
     delay(15);
 
-    // 1. Tasti 1..8 per questo nodo (binary_sensor con off_delay per trigger)
+    // 1. Tasti 1..8 (Click Singolo: binary_sensor su btn/1..8 con off_delay per trigger)
     for (uint8_t b = 1; b <= 8; b++) {
         snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/binary_sensor/%s_n%u/btn_%u/config"), config.mqtt_client_id, node_id, b);
 
@@ -38,6 +38,42 @@ void ha_discovery_publish_node(uint8_t node_id) {
             "\"off_dly\":1,\"uniq_id\":\"%s_n%u_b%u\",\"ic\":\"mdi:gesture-tap-button\","
             "\"dev\":{\"ids\":[\"%s_node_%u\"],\"name\":\"%s Tastiera %u\",\"mf\":\"PJON RS485\",\"via_device\":\"%s\"}}"),
             b, config.mqtt_client_id, node_id, b,
+            config.mqtt_client_id, node_id, b,
+            config.mqtt_client_id, node_id, config.gateway_name, node_id, config.mqtt_client_id
+        );
+
+        client.publish(tbuf, json, true);
+        delay(15);
+    }
+
+    // 1b. Tasti 1..8 Pressione Lunga (binary_sensor su btn/9..16)
+    for (uint8_t b = 1; b <= 8; b++) {
+        snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/binary_sensor/%s_n%u/btn_long_%u/config"), config.mqtt_client_id, node_id, b);
+
+        char json[320];
+        snprintf_P(json, sizeof(json),
+            PSTR("{\"name\":\"Tasto %u (Pressione Lunga)\",\"stat_t\":\"%s/node/%u/btn/%u\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\","
+            "\"off_dly\":1,\"uniq_id\":\"%s_n%u_bl%u\",\"ic\":\"mdi:gesture-tap-hold\","
+            "\"dev\":{\"ids\":[\"%s_node_%u\"],\"name\":\"%s Tastiera %u\",\"mf\":\"PJON RS485\",\"via_device\":\"%s\"}}"),
+            b, config.mqtt_client_id, node_id, b + 8,
+            config.mqtt_client_id, node_id, b,
+            config.mqtt_client_id, node_id, config.gateway_name, node_id, config.mqtt_client_id
+        );
+
+        client.publish(tbuf, json, true);
+        delay(15);
+    }
+
+    // 1c. Tasti 1..8 Doppio Click (binary_sensor su btn/17..24)
+    for (uint8_t b = 1; b <= 8; b++) {
+        snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/binary_sensor/%s_n%u/btn_dbl_%u/config"), config.mqtt_client_id, node_id, b);
+
+        char json[320];
+        snprintf_P(json, sizeof(json),
+            PSTR("{\"name\":\"Tasto %u (Doppio Click)\",\"stat_t\":\"%s/node/%u/btn/%u\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\","
+            "\"off_dly\":1,\"uniq_id\":\"%s_n%u_bd%u\",\"ic\":\"mdi:gesture-double-tap\","
+            "\"dev\":{\"ids\":[\"%s_node_%u\"],\"name\":\"%s Tastiera %u\",\"mf\":\"PJON RS485\",\"via_device\":\"%s\"}}"),
+            b, config.mqtt_client_id, node_id, b + 16,
             config.mqtt_client_id, node_id, b,
             config.mqtt_client_id, node_id, config.gateway_name, node_id, config.mqtt_client_id
         );
@@ -64,6 +100,20 @@ void ha_discovery_publish_node(uint8_t node_id) {
         delay(15);
     }
 
+    // 2b. Master: Tutti i LED (light switchabile su led 0)
+    snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/light/%s_n%u/led_all/config"), config.mqtt_client_id, node_id);
+    char j_led_all[320];
+    snprintf_P(j_led_all, sizeof(j_led_all),
+        PSTR("{\"name\":\"Tutti i LED\",\"stat_t\":\"%s/node/%u/led/0/state\",\"cmd_t\":\"%s/node/%u/led/0/set\","
+        "\"pl_on\":\"ON\",\"pl_off\":\"OFF\",\"uniq_id\":\"%s_n%u_l0\",\"ic\":\"mdi:lightbulb-group\","
+        "\"dev\":{\"ids\":[\"%s_node_%u\"],\"name\":\"%s Tastiera %u\",\"mf\":\"PJON RS485\",\"via_device\":\"%s\"}}"),
+        config.mqtt_client_id, node_id, config.mqtt_client_id, node_id,
+        config.mqtt_client_id, node_id,
+        config.mqtt_client_id, node_id, config.gateway_name, node_id, config.mqtt_client_id
+    );
+    client.publish(tbuf, j_led_all, true);
+    delay(15);
+
     // 3. Sensore di Temperatura LM75 per questo nodo (se equipaggiato)
     snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/sensor/%s_n%u/temp/config"), config.mqtt_client_id, node_id);
     char j_node_temp[320];
@@ -76,6 +126,20 @@ void ha_discovery_publish_node(uint8_t node_id) {
         config.mqtt_client_id, node_id, config.gateway_name, node_id, config.mqtt_client_id
     );
     client.publish(tbuf, j_node_temp, true);
+    delay(15);
+
+    // 4. Sensore Qualità Segnale RS485
+    snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/sensor/%s_n%u/quality/config"), config.mqtt_client_id, node_id);
+    char j_node_qual[320];
+    snprintf_P(j_node_qual, sizeof(j_node_qual),
+        PSTR("{\"name\":\"Qualit\\u00e0 Link Tastiera %u\",\"stat_t\":\"%s/node/%u/quality\",\"unit_of_meas\":\"%%\","
+        "\"dev_cla\":\"signal_strength\",\"entity_category\":\"diagnostic\",\"uniq_id\":\"%s_n%u_quality\",\"ic\":\"mdi:signal\","
+        "\"dev\":{\"ids\":[\"%s_node_%u\"],\"name\":\"%s Tastiera %u\",\"mf\":\"PJON RS485\",\"via_device\":\"%s\"}}"),
+        node_id, config.mqtt_client_id, node_id,
+        config.mqtt_client_id, node_id,
+        config.mqtt_client_id, node_id, config.gateway_name, node_id, config.mqtt_client_id
+    );
+    client.publish(tbuf, j_node_qual, true);
     delay(15);
 }
 

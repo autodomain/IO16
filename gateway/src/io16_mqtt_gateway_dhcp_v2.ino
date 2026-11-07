@@ -346,6 +346,7 @@ void reconnect_non_blocking() {
       snprintf(cmd_topic, sizeof(cmd_topic), "%s/node/+/led/+/set",
                config.mqtt_client_id);
       client.subscribe(cmd_topic);
+      client.subscribe("homeassistant/status");
 
       // Pubblica Auto-Discovery Home Assistant
       if (config.ha_discovery) {
@@ -361,6 +362,16 @@ void reconnect_non_blocking() {
 void callback(char *topic, byte *payload, unsigned int length) {
   mqtt_messages_rx++;
   web_server_log_rx(topic, payload, length);
+
+  // 0. Home Assistant Birth Message (se HA si riavvia, ri-annuncia tutti i nodi e configurazioni)
+  if (strcmp(topic, "homeassistant/status") == 0) {
+    if (length >= 6 && strncasecmp((char *)payload, "online", 6) == 0) {
+      if (config.ha_discovery) {
+        ha_discovery_publish_all();
+      }
+    }
+    return;
+  }
 
   // 1. Comando legacy: L<led_num>,<address>,<led_stat> (es: L1,1,1)
   if (length >= 6 && (char)payload[0] == 'L') {
