@@ -2,12 +2,22 @@
 #include <PubSubClient.h>
 #include <EEPROM.h>
 #include "config.h"
+#include "web_server.h"
 
 extern PubSubClient client;
 extern void pjon_send_ping(uint8_t addr);
 extern uint64_t known_nodes_mask;
 
 RemoteNodeInfo remote_nodes[MAX_DIAG_NODES + 1];
+bool master_night_mode = false;
+
+uint8_t get_rs485_bus_health_pct() {
+    uint32_t total = pjon_packets_tx + pjon_packets_rx;
+    if (total == 0) return 100;
+    uint32_t fails = pjon_packets_err;
+    if (fails >= total) return 0;
+    return (uint8_t)(100 - (fails * 100UL / total));
+}
 
 #define NODE_STORAGE_MAGIC 0x4E4F4445 // "NODE"
 #define NODE_STORAGE_ADDR 256

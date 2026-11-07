@@ -15,6 +15,7 @@ extern unsigned long mqtt_messages_rx;
 // Ultimi dati MQTT ricevuti/trasmessi
 #define MQTT_LOG_DEPTH 5
 struct MqttLogItem {
+  char time[9];       // Orario formato HH:MM:SS
   char topic[44];
   char payload[24];
 };

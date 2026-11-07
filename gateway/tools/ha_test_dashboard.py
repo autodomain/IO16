@@ -15,7 +15,10 @@ state = {
         "temp": "30.1",
         "ip": "192.168.1.66",
         "rx": 0,
-        "tx": 0
+        "tx": 0,
+        "bus_health": 100,
+        "time": "--:--:--",
+        "night_mode": "OFF"
     },
     "nodes": {
         "6": {
@@ -23,6 +26,8 @@ state = {
             "status": "online",
             "temp": "25.0",
             "quality": 100,
+            "night_mode": "OFF",
+            "clean_mode": "OFF",
             "leds": {str(i): "OFF" for i in range(1, 9)},
             "led_all": "OFF",
             "last_btn": {"num": None, "type": None, "time": 0}
@@ -32,6 +37,8 @@ state = {
             "status": "online",
             "temp": "N.D.",
             "quality": 100,
+            "night_mode": "OFF",
+            "clean_mode": "OFF",
             "leds": {str(i): "OFF" for i in range(1, 9)},
             "led_all": "OFF",
             "last_btn": {"num": None, "type": None, "time": 0}
@@ -65,12 +72,24 @@ def on_mqtt_message(client, userdata, msg):
         state["gw"]["status"] = payload
     elif topic == "pjon_gw_aaf2/temperature":
         state["gw"]["temp"] = payload
+    elif topic == "pjon_gw_aaf2/bus_health":
+        try:
+            state["gw"]["bus_health"] = int(payload)
+        except ValueError:
+            pass
+    elif topic == "pjon_gw_aaf2/time":
+        state["gw"]["time"] = payload
+    elif topic == "pjon_gw_aaf2/night_mode/state":
+        state["gw"]["night_mode"] = payload
+        add_event("system", f"Master Modalita Notte: {payload}")
     elif topic == "pjon_gw_aaf2/telemetry":
         try:
             d = json.loads(payload)
             state["gw"]["ip"] = d.get("ip", state["gw"]["ip"])
             state["gw"]["rx"] = d.get("pjon_rx", state["gw"]["rx"])
             state["gw"]["tx"] = d.get("pjon_tx", state["gw"]["tx"])
+            if "health" in d:
+                state["gw"]["bus_health"] = int(d["health"])
         except Exception:
             pass
 
@@ -85,6 +104,8 @@ def on_mqtt_message(client, userdata, msg):
                     "status": "online",
                     "temp": "N.D.",
                     "quality": 100,
+                    "night_mode": "OFF",
+                    "clean_mode": "OFF",
                     "leds": {str(i): "OFF" for i in range(1, 9)},
                     "led_all": "OFF",
                     "last_btn": {"num": None, "type": None, "time": 0}
@@ -107,6 +128,15 @@ def on_mqtt_message(client, userdata, msg):
                     n["quality"] = int(payload)
                 except ValueError:
                     pass
+
+            # Modalita Notte & Pulizia
+            elif parts[3] == "night_mode" and len(parts) >= 5 and parts[4] == "state":
+                n["night_mode"] = payload
+                add_event("system", f"Nodo {nid} Modalita Notte: {payload}")
+
+            elif parts[3] == "clean_mode" and len(parts) >= 5 and parts[4] == "state":
+                n["clean_mode"] = payload
+                add_event("system", f"Nodo {nid} Modalita Pulizia: {payload}")
 
             # LED State: node/<id>/led/<l>/state
             elif parts[3] == "led" and len(parts) >= 6 and parts[5] == "state":
@@ -377,6 +407,16 @@ function toggleLed(nodeId, ledId, curState) {
   fetch('/api/set_led?node=' + nodeId + '&led=' + ledId + '&state=' + nextState, { method: 'POST' });
 }
 
+function toggleNightMode(nodeId, curState) {
+  var nextState = (curState === 'ON') ? 'OFF' : 'ON';
+  fetch('/api/set_night_mode?node=' + nodeId + '&state=' + nextState, { method: 'POST' });
+}
+
+function toggleCleanMode(nodeId, curState) {
+  var nextState = (curState === 'ON') ? 'OFF' : 'ON';
+  fetch('/api/set_clean_mode?node=' + nodeId + '&state=' + nextState, { method: 'POST' });
+}
+
 function updateUI() {
   fetch('/api/state')
     .then(r => r.json())
@@ -393,8 +433,13 @@ function updateUI() {
           </div>
           <div class="stats-row">
             <div class="stat-pill">IP Gateway<b>${data.gw.ip}</b></div>
+            <div class="stat-pill">Salute Bus RS485<b style="color:${data.gw.bus_health>=95?'#22c55e':(data.gw.bus_health>=80?'#eab308':'#ef4444')}">${data.gw.bus_health}%</b></div>
+            <div class="stat-pill">Data/Ora NTP<b>${data.gw.time}</b></div>
+          </div>
+          <div class="stats-row" style="margin-top:6px">
             <div class="stat-pill">Temp Gateway<b>${data.gw.temp} °C</b></div>
             <div class="stat-pill">Pacchetti RX/TX<b>${data.gw.rx} / ${data.gw.tx}</b></div>
+            <div class="stat-pill" style="cursor:pointer" onclick="toggleNightMode('all', '${data.gw.night_mode}')">Notte Tutte<b>${data.gw.night_mode==='ON'?'🌙 ATTIVA':'☀️ DISAT'}</b></div>
           </div>
           <div style="color:var(--text-muted);font-size:12px;margin-top:10px">
             Broker: <code>192.168.1.51:1883</code> &bull; Client: <code>pjon_gw_aaf2</code>
@@ -418,6 +463,15 @@ function updateUI() {
               <div class="stat-pill">Temperatura<b>${n.temp !== 'N.D.' ? n.temp + ' °C' : 'N.D.'}</b></div>
               <div class="stat-pill">Qualità Segnale<b>${n.quality}%</b></div>
               <div class="stat-pill">Ultimo Tasto<b>${n.last_btn.num ? 'P' + n.last_btn.num : '-'}</b></div>
+            </div>
+
+            <div style="display:flex;gap:6px;margin:10px 0">
+              <button onclick="toggleNightMode('${nid}', '${n.night_mode}')" style="flex:1;background:${n.night_mode==='ON'?'#4f46e5':'#0f172a'};color:#fff;border:1px solid var(--card-border);border-radius:6px;padding:6px 8px;font-size:11px;cursor:pointer">
+                🌙 Notte: <b>${n.night_mode}</b>
+              </button>
+              <button onclick="toggleCleanMode('${nid}', '${n.clean_mode}')" style="flex:1;background:${n.clean_mode==='ON'?'#d97706':'#0f172a'};color:#fff;border:1px solid var(--card-border);border-radius:6px;padding:6px 8px;font-size:11px;cursor:pointer">
+                🧹 Pulizia (60s): <b>${n.clean_mode}</b>
+              </button>
             </div>
 
             <div class="section-label">Pulsanti Fisici (Rilevazione Click in Tempo Reale)</div>
@@ -525,6 +579,37 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
+        elif self.path.startswith("/api/set_night_mode"):
+            import urllib.parse
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            node_id = params.get("node", ["all"])[0]
+            st = params.get("state", ["ON"])[0]
+            if node_id == "all" or node_id == "0":
+                topic = "pjon_gw_aaf2/night_mode/set"
+            else:
+                topic = f"pjon_gw_aaf2/node/{node_id}/night_mode/set"
+            if mqtt_client:
+                mqtt_client.publish(topic, st)
+                add_event("system", f"Inviato comando: {topic} -> {st}")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        elif self.path.startswith("/api/set_clean_mode"):
+            import urllib.parse
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            node_id = params.get("node", ["6"])[0]
+            st = params.get("state", ["ON"])[0]
+            topic = f"pjon_gw_aaf2/node/{node_id}/clean_mode/set"
+            if mqtt_client:
+                mqtt_client.publish(topic, st)
+                add_event("system", f"Inviato comando: {topic} -> {st}")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
         else:
             self.send_response(404)
             self.end_headers()
@@ -554,3 +639,4 @@ if __name__ == "__main__":
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+

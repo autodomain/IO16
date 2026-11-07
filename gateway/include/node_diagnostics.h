@@ -19,9 +19,12 @@ struct RemoteNodeInfo {
     uint8_t backlight_pct;   // Percentuale luminosità standby (0..100%)
     uint8_t led_mode;        // Modalità accensione LED (0..3)
     bool has_config;         // True se la configurazione è stata letta dal nodo
+    bool night_mode;         // True se la tastiera è in Modalità Notte
+    bool clean_mode;         // True se la tastiera è in Modalità Pulizia (comandi inibiti)
 };
 
 extern RemoteNodeInfo remote_nodes[MAX_DIAG_NODES + 1];
+extern bool master_night_mode;
 
 void node_diag_init();
 void node_diag_mark_seen(uint8_t node_id, uint8_t bus_id = 1);
@@ -34,8 +37,11 @@ void node_diag_force_ping_all();
 void node_diag_start_discovery_scan();
 bool node_diag_is_scanning();
 void node_diag_clear_all();
+uint8_t get_rs485_bus_health_pct();
 void pjon_send_ping(uint8_t addr);
 void pjon_send_temp_req(uint8_t addr);
 void pjon_send_config_req(uint8_t addr);
 void pjon_send_config_set(uint8_t addr, uint8_t backlight_pct, uint8_t led_mode);
+void pjon_send_night_mode(uint8_t addr, bool enable);
+void pjon_send_clean_mode(uint8_t addr, bool enable);
 

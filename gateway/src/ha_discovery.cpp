@@ -5,6 +5,7 @@
 #include "web_server.h"
 #include "lm75_sensor.h"
 #include "node_diagnostics.h"
+#include "ntp_client.h"
 
 extern PubSubClient client;
 
@@ -141,6 +142,34 @@ void ha_discovery_publish_node(uint8_t node_id) {
     );
     client.publish(tbuf, j_node_qual, true);
     delay(15);
+
+    // 5. Switch Modalita Notte per questo nodo
+    snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/switch/%s_n%u/night_mode/config"), config.mqtt_client_id, node_id);
+    char j_node_nm[320];
+    snprintf_P(j_node_nm, sizeof(j_node_nm),
+        PSTR("{\"name\":\"Modalit\\u00e0 Notte\",\"stat_t\":\"%s/node/%u/night_mode/state\",\"cmd_t\":\"%s/node/%u/night_mode/set\","
+        "\"pl_on\":\"ON\",\"pl_off\":\"OFF\",\"uniq_id\":\"%s_n%u_nm\",\"ic\":\"mdi:weather-night\","
+        "\"dev\":{\"ids\":[\"%s_node_%u\"],\"name\":\"%s Tastiera %u\",\"mf\":\"PJON RS485\",\"via_device\":\"%s\"}}"),
+        config.mqtt_client_id, node_id, config.mqtt_client_id, node_id,
+        config.mqtt_client_id, node_id,
+        config.mqtt_client_id, node_id, config.gateway_name, node_id, config.mqtt_client_id
+    );
+    client.publish(tbuf, j_node_nm, true);
+    delay(15);
+
+    // 6. Switch Modalita Pulizia per questo nodo
+    snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/switch/%s_n%u/clean_mode/config"), config.mqtt_client_id, node_id);
+    char j_node_cm[320];
+    snprintf_P(j_node_cm, sizeof(j_node_cm),
+        PSTR("{\"name\":\"Modalit\\u00e0 Pulizia (60s)\",\"stat_t\":\"%s/node/%u/clean_mode/state\",\"cmd_t\":\"%s/node/%u/clean_mode/set\","
+        "\"pl_on\":\"ON\",\"pl_off\":\"OFF\",\"uniq_id\":\"%s_n%u_cm\",\"ic\":\"mdi:spray-bottle\","
+        "\"dev\":{\"ids\":[\"%s_node_%u\"],\"name\":\"%s Tastiera %u\",\"mf\":\"PJON RS485\",\"via_device\":\"%s\"}}"),
+        config.mqtt_client_id, node_id, config.mqtt_client_id, node_id,
+        config.mqtt_client_id, node_id,
+        config.mqtt_client_id, node_id, config.gateway_name, node_id, config.mqtt_client_id
+    );
+    client.publish(tbuf, j_node_cm, true);
+    delay(15);
 }
 
 void ha_discovery_publish_all() {
@@ -202,7 +231,42 @@ void ha_discovery_publish_all() {
     client.publish(tbuf, j_temp, true);
     delay(20);
 
-    // 6. Registra tutti i nodi client registrati e memorizzati in EEPROM (fino a 63 nodi)
+    // 6. Sensore Salute Bus RS485
+    snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/sensor/%s/bus_health/config"), config.mqtt_client_id);
+    char j_health[280];
+    snprintf_P(j_health, sizeof(j_health),
+        PSTR("{\"name\":\"Salute Bus RS485\",\"stat_t\":\"%s/bus_health\",\"unit_of_meas\":\"%%\","
+        "\"dev_cla\":\"signal_strength\",\"entity_category\":\"diagnostic\",\"uniq_id\":\"%s_bus_health\","
+        "\"ic\":\"mdi:transit-connection-variant\",\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"PJON RS485\"}}"),
+        config.mqtt_client_id, config.mqtt_client_id, config.mqtt_client_id, config.gateway_name
+    );
+    client.publish(tbuf, j_health, true);
+    delay(20);
+
+    // 7. Sensore Data e Ora Gateway (NTP)
+    snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/sensor/%s/time/config"), config.mqtt_client_id);
+    char j_time[280];
+    snprintf_P(j_time, sizeof(j_time),
+        PSTR("{\"name\":\"Data e Ora Gateway\",\"stat_t\":\"%s/time\",\"entity_category\":\"diagnostic\","
+        "\"uniq_id\":\"%s_time\",\"ic\":\"mdi:clock-check-outline\",\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"PJON RS485\"}}"),
+        config.mqtt_client_id, config.mqtt_client_id, config.mqtt_client_id, config.gateway_name
+    );
+    client.publish(tbuf, j_time, true);
+    delay(20);
+
+    // 8. Master Switch Modalita Notte (Tutte le Tastiere)
+    snprintf_P(tbuf, sizeof(tbuf), PSTR("homeassistant/switch/%s/night_mode/config"), config.mqtt_client_id);
+    char j_nm_all[280];
+    snprintf_P(j_nm_all, sizeof(j_nm_all),
+        PSTR("{\"name\":\"Modalit\\u00e0 Notte (Tutte le Tastiere)\",\"stat_t\":\"%s/night_mode/state\",\"cmd_t\":\"%s/night_mode/set\","
+        "\"pl_on\":\"ON\",\"pl_off\":\"OFF\",\"uniq_id\":\"%s_night_mode_all\",\"ic\":\"mdi:weather-night\","
+        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"PJON RS485\"}}"),
+        config.mqtt_client_id, config.mqtt_client_id, config.mqtt_client_id, config.mqtt_client_id, config.gateway_name
+    );
+    client.publish(tbuf, j_nm_all, true);
+    delay(20);
+
+    // 9. Registra tutti i nodi client registrati e memorizzati in EEPROM (fino a 63 nodi)
     for (uint8_t n = 1; n <= 63; n++) {
         if (remote_nodes[n].active) {
             ha_discovery_publish_node(n);
@@ -217,20 +281,35 @@ void ha_publish_telemetry() {
     snprintf(tele_topic, sizeof(tele_topic), "%s/telemetry", config.mqtt_client_id);
 
     IPAddress ip = Ethernet.localIP();
-    char tele_json[150];
+    uint8_t health = get_rs485_bus_health_pct();
+    char time_str[24];
+    ntp_get_datetime_str(time_str, sizeof(time_str));
+
+    char tele_json[180];
     if (lm75_is_available()) {
         char temp_str[10];
         dtostrf(lm75_get_temp(), 4, 1, temp_str);
         snprintf(tele_json, sizeof(tele_json),
-            "{\"ip\":\"%u.%u.%u.%u\",\"pjon_rx\":%lu,\"pjon_tx\":%lu,\"pjon_err\":%lu,\"uptime\":%lu,\"temp\":%s}",
-            ip[0], ip[1], ip[2], ip[3], pjon_packets_rx, pjon_packets_tx, pjon_packets_err, millis() / 1000, temp_str
+            "{\"ip\":\"%u.%u.%u.%u\",\"pjon_rx\":%lu,\"pjon_tx\":%lu,\"pjon_err\":%lu,\"health\":%u,\"uptime\":%lu,\"temp\":%s}",
+            ip[0], ip[1], ip[2], ip[3], pjon_packets_rx, pjon_packets_tx, pjon_packets_err, health, millis() / 1000, temp_str
         );
     } else {
         snprintf(tele_json, sizeof(tele_json),
-            "{\"ip\":\"%u.%u.%u.%u\",\"pjon_rx\":%lu,\"pjon_tx\":%lu,\"pjon_err\":%lu,\"uptime\":%lu}",
-            ip[0], ip[1], ip[2], ip[3], pjon_packets_rx, pjon_packets_tx, pjon_packets_err, millis() / 1000
+            "{\"ip\":\"%u.%u.%u.%u\",\"pjon_rx\":%lu,\"pjon_tx\":%lu,\"pjon_err\":%lu,\"health\":%u,\"uptime\":%lu}",
+            ip[0], ip[1], ip[2], ip[3], pjon_packets_rx, pjon_packets_tx, pjon_packets_err, health, millis() / 1000
         );
     }
 
     client.publish(tele_topic, tele_json);
+
+    // Pubblica anche i sensori dedicati diretti per HA
+    char h_topic[48];
+    snprintf(h_topic, sizeof(h_topic), "%s/bus_health", config.mqtt_client_id);
+    char h_str[8];
+    snprintf(h_str, sizeof(h_str), "%u", health);
+    client.publish(h_topic, h_str, true);
+
+    char tm_topic[48];
+    snprintf(tm_topic, sizeof(tm_topic), "%s/time", config.mqtt_client_id);
+    client.publish(tm_topic, time_str, true);
 }

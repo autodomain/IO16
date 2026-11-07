@@ -26,6 +26,7 @@ void pjon_io_write(uint8_t pin, uint8_t val);
 #include "ha_discovery.h"
 #include "lm75_sensor.h"
 #include "node_diagnostics.h"
+#include "ntp_client.h"
 #include "ota_flasher.h"
 #include "web_server.h"
 #include <Ethernet.h>
@@ -307,6 +308,40 @@ void pjon_send_config_set(uint8_t addr, uint8_t backlight_pct, uint8_t led_mode)
   pjon_packets_tx++;
 }
 
+void pjon_send_night_mode(uint8_t addr, bool enable) {
+  char pkt[2] = { 'N', enable ? '1' : '0' };
+  if (addr == 0) {
+    bus1.send(0, pkt, 2, bus1.config & ~PJON_ACK_REQ_BIT);
+    bus2.send(0, pkt, 2, bus2.config & ~PJON_ACK_REQ_BIT);
+    pjon_packets_tx += 2;
+    return;
+  }
+  uint8_t b = (addr <= MAX_DIAG_NODES && remote_nodes[addr].bus_id > 0) ? remote_nodes[addr].bus_id : 1;
+  uint8_t h = (b == 2 ? bus2.config : bus1.config) & ~PJON_ACK_REQ_BIT;
+  if (b == 2)
+    bus2.send(addr, pkt, 2, h);
+  else
+    bus1.send(addr, pkt, 2, h);
+  pjon_packets_tx++;
+}
+
+void pjon_send_clean_mode(uint8_t addr, bool enable) {
+  char pkt[2] = { 'K', enable ? '1' : '0' };
+  if (addr == 0) {
+    bus1.send(0, pkt, 2, bus1.config & ~PJON_ACK_REQ_BIT);
+    bus2.send(0, pkt, 2, bus2.config & ~PJON_ACK_REQ_BIT);
+    pjon_packets_tx += 2;
+    return;
+  }
+  uint8_t b = (addr <= MAX_DIAG_NODES && remote_nodes[addr].bus_id > 0) ? remote_nodes[addr].bus_id : 1;
+  uint8_t h = (b == 2 ? bus2.config : bus1.config) & ~PJON_ACK_REQ_BIT;
+  if (b == 2)
+    bus2.send(addr, pkt, 2, h);
+  else
+    bus1.send(addr, pkt, 2, h);
+  pjon_packets_tx++;
+}
+
 bool mqtt_publish_tracked(const char *t, const char *p, bool retain = false) {
   web_server_log_tx(t, p);
   mqtt_messages_tx++;
@@ -341,10 +376,15 @@ void reconnect_non_blocking() {
       client.subscribe("home/pm_gate/set/#");
 
       // Sottoscrizione comandi Home Assistant per questo gateway
-      // Topic: <gateway_id>/node/+/led/+/set
+      // Topic: <gateway_id>/node/+/led/+/set, night_mode, clean_mode
       char cmd_topic[56];
-      snprintf(cmd_topic, sizeof(cmd_topic), "%s/node/+/led/+/set",
-               config.mqtt_client_id);
+      snprintf(cmd_topic, sizeof(cmd_topic), "%s/node/+/led/+/set", config.mqtt_client_id);
+      client.subscribe(cmd_topic);
+      snprintf(cmd_topic, sizeof(cmd_topic), "%s/node/+/night_mode/set", config.mqtt_client_id);
+      client.subscribe(cmd_topic);
+      snprintf(cmd_topic, sizeof(cmd_topic), "%s/node/+/clean_mode/set", config.mqtt_client_id);
+      client.subscribe(cmd_topic);
+      snprintf(cmd_topic, sizeof(cmd_topic), "%s/night_mode/set", config.mqtt_client_id);
       client.subscribe(cmd_topic);
       client.subscribe("homeassistant/status");
 
@@ -383,31 +423,77 @@ void callback(char *topic, byte *payload, unsigned int length) {
     return;
   }
 
-  // 2. Comando Home Assistant: <gw_id>/node/<node_id>/led/<led_id>/set
+  // 1b. Master Night Mode: <gw_id>/night_mode/set
+  char master_nm_topic[48];
+  snprintf(master_nm_topic, sizeof(master_nm_topic), "%s/night_mode/set", config.mqtt_client_id);
+  if (strcmp(topic, master_nm_topic) == 0) {
+    bool is_on = (length > 0 && ((char)payload[0] == '1' || strncasecmp((char *)payload, "ON", 2) == 0));
+    master_night_mode = is_on;
+    pjon_send_night_mode(0, is_on);
+    for (uint8_t i = 1; i <= MAX_DIAG_NODES; i++) {
+      if (remote_nodes[i].active) remote_nodes[i].night_mode = is_on;
+    }
+    char st_topic[48];
+    snprintf(st_topic, sizeof(st_topic), "%s/night_mode/state", config.mqtt_client_id);
+    client.publish(st_topic, is_on ? "ON" : "OFF", true);
+    return;
+  }
+
+  // 2. Comando Home Assistant: <gw_id>/node/<node_id>/...
   char prefix_check[40];
   snprintf(prefix_check, sizeof(prefix_check), "%s/node/",
            config.mqtt_client_id);
   if (strncmp(topic, prefix_check, strlen(prefix_check)) == 0) {
     const char *p = topic + strlen(prefix_check);
     int node_id = atoi(p);
-    const char *p_led = strstr(p, "/led/");
-    if (p_led && node_id > 0) {
-      int led_id = atoi(p_led + 5);
+    if (node_id > 0 && node_id <= MAX_DIAG_NODES) {
+      // 2a. Comando LED: /led/<id>/set
+      const char *p_led = strstr(p, "/led/");
+      if (p_led) {
+        int led_id = atoi(p_led + 5);
 
-      uint8_t stat = 0;
-      if (length > 0 && ((char)payload[0] == '1' ||
-                         strncasecmp((char *)payload, "ON", 2) == 0)) {
-        stat = 1;
+        uint8_t stat = 0;
+        if (length > 0 && ((char)payload[0] == '1' ||
+                           strncasecmp((char *)payload, "ON", 2) == 0)) {
+          stat = 1;
+        }
+
+        pjon_send_test((uint8_t)node_id, (uint8_t)led_id, stat);
+
+        // Pubblica lo stato di ritorno verso Home Assistant
+        char state_topic[56];
+        snprintf(state_topic, sizeof(state_topic), "%s/node/%u/led/%u/state",
+                 config.mqtt_client_id, node_id, led_id);
+        client.publish(state_topic, stat ? "ON" : "OFF", true);
+        mqtt_messages_tx++;
+        return;
       }
 
-      pjon_send_test((uint8_t)node_id, (uint8_t)led_id, stat);
+      // 2b. Comando Night Mode: /night_mode/set
+      const char *p_nm = strstr(p, "/night_mode/set");
+      if (p_nm) {
+        bool is_on = (length > 0 && ((char)payload[0] == '1' || strncasecmp((char *)payload, "ON", 2) == 0));
+        remote_nodes[node_id].night_mode = is_on;
+        pjon_send_night_mode(node_id, is_on);
+        char state_topic[56];
+        snprintf(state_topic, sizeof(state_topic), "%s/node/%u/night_mode/state", config.mqtt_client_id, node_id);
+        client.publish(state_topic, is_on ? "ON" : "OFF", true);
+        mqtt_messages_tx++;
+        return;
+      }
 
-      // Pubblica lo stato di ritorno verso Home Assistant
-      char state_topic[56];
-      snprintf(state_topic, sizeof(state_topic), "%s/node/%u/led/%u/state",
-               config.mqtt_client_id, node_id, led_id);
-      client.publish(state_topic, stat ? "ON" : "OFF", true);
-      mqtt_messages_tx++;
+      // 2c. Comando Clean Mode: /clean_mode/set
+      const char *p_cm = strstr(p, "/clean_mode/set");
+      if (p_cm) {
+        bool is_on = (length > 0 && ((char)payload[0] == '1' || strncasecmp((char *)payload, "ON", 2) == 0));
+        remote_nodes[node_id].clean_mode = is_on;
+        pjon_send_clean_mode(node_id, is_on);
+        char state_topic[56];
+        snprintf(state_topic, sizeof(state_topic), "%s/node/%u/clean_mode/state", config.mqtt_client_id, node_id);
+        client.publish(state_topic, is_on ? "ON" : "OFF", true);
+        mqtt_messages_tx++;
+        return;
+      }
     }
   }
 }
@@ -426,10 +512,32 @@ void handle_pjon_packet(uint8_t bus_id, uint8_t *payload, uint16_t length,
   uint8_t node_id = packet_info.tx.id;
   node_diag_mark_seen(node_id, bus_id);
 
-  // Se e' un pacchetto Keepalive / Heartbeat di diagnostica, non propagare come
-  // tasto
-  if (length >= 1 && (payload[0] == 'K' || payload[0] == '?')) {
+  // Se e' un pacchetto Keepalive / Heartbeat puro di diagnostica
+  if (length == 1 && (payload[0] == 'K' || payload[0] == '?')) {
     dbg_k_rx++;
+    digitalWrite(led_activity, LOW);
+    return;
+  }
+
+  // Risposta Modalita Notte ('N') o Modalita Pulizia ('K')
+  if (length >= 2 && payload[0] == 'N') {
+    if (node_id >= 1 && node_id <= MAX_DIAG_NODES) {
+      remote_nodes[node_id].night_mode = (payload[1] == '1');
+      char st_topic[56];
+      snprintf(st_topic, sizeof(st_topic), "%s/node/%u/night_mode/state", config.mqtt_client_id, node_id);
+      client.publish(st_topic, remote_nodes[node_id].night_mode ? "ON" : "OFF", true);
+    }
+    digitalWrite(led_activity, LOW);
+    return;
+  }
+
+  if (length >= 2 && payload[0] == 'K') {
+    if (node_id >= 1 && node_id <= MAX_DIAG_NODES) {
+      remote_nodes[node_id].clean_mode = (payload[1] == '1');
+      char st_topic[56];
+      snprintf(st_topic, sizeof(st_topic), "%s/node/%u/clean_mode/state", config.mqtt_client_id, node_id);
+      client.publish(st_topic, remote_nodes[node_id].clean_mode ? "ON" : "OFF", true);
+    }
     digitalWrite(led_activity, LOW);
     return;
   }
@@ -612,6 +720,9 @@ void setup() {
     Ethernet.begin(config.mac, static_ip, static_dns, static_gw, static_sub);
   }
 
+  // Inizializza sincronizzazione oraria NTP via Ethernet
+  ntp_init();
+
   // Segnale LED: doppio lampeggio rapido indica rete pronta
   digitalWrite(led_activity, HIGH);
   delay(150);
@@ -676,6 +787,9 @@ void loop() {
   // Gestione sensore di temperatura I2C LM75
   lm75_loop();
   DBG_SEC(1, dbg_ts);
+
+  // Gestione sincronizzazione oraria NTP
+  ntp_update();
 
   // Gestione MQTT
   if (!client.connected()) {

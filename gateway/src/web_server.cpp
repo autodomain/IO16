@@ -2,6 +2,7 @@
 #include "lm75_sensor.h"
 #include "node_diagnostics.h"
 #include "ota_flasher.h"
+#include "ntp_client.h"
 #include <PubSubClient.h>
 #include <avr/wdt.h>
 
@@ -70,6 +71,7 @@ void web_server_log_rx(const char *topic, const uint8_t *payload, unsigned int l
   for (int i = MQTT_LOG_DEPTH - 1; i > 0; i--) {
     mqtt_rx_history[i] = mqtt_rx_history[i - 1];
   }
+  ntp_get_time_str(mqtt_rx_history[0].time, sizeof(mqtt_rx_history[0].time));
   strncpy(mqtt_rx_history[0].topic, last_mqtt_rx_topic, sizeof(mqtt_rx_history[0].topic) - 1);
   mqtt_rx_history[0].topic[sizeof(mqtt_rx_history[0].topic) - 1] = '\0';
   strncpy(mqtt_rx_history[0].payload, last_mqtt_rx_payload, sizeof(mqtt_rx_history[0].payload) - 1);
@@ -87,6 +89,7 @@ void web_server_log_tx(const char *topic, const char *payload) {
   for (int i = MQTT_LOG_DEPTH - 1; i > 0; i--) {
     mqtt_tx_history[i] = mqtt_tx_history[i - 1];
   }
+  ntp_get_time_str(mqtt_tx_history[0].time, sizeof(mqtt_tx_history[0].time));
   strncpy(mqtt_tx_history[0].topic, last_mqtt_tx_topic, sizeof(mqtt_tx_history[0].topic) - 1);
   mqtt_tx_history[0].topic[sizeof(mqtt_tx_history[0].topic) - 1] = '\0';
   strncpy(mqtt_tx_history[0].payload, last_mqtt_tx_payload, sizeof(mqtt_tx_history[0].payload) - 1);
@@ -708,6 +711,54 @@ void web_server_handle() {
     }
   }
 
+  if (strncmp(path, "/api/night_mode", 15) == 0) {
+    char t_node[16] = "all";
+    char t_st[8] = "1";
+    char *q = strchr(path, '?');
+    if (q) {
+      get_form_value(q + 1, "node", t_node, sizeof(t_node));
+      get_form_value(q + 1, "state", t_st, sizeof(t_st));
+    }
+    bool st = (atoi(t_st) != 0);
+    if (strcmp(t_node, "all") == 0 || strcmp(t_node, "0") == 0) {
+      master_night_mode = st;
+      pjon_send_night_mode(0, st);
+      for (uint8_t i = 1; i <= MAX_DIAG_NODES; i++) {
+        if (remote_nodes[i].active) remote_nodes[i].night_mode = st;
+      }
+    } else {
+      uint8_t n_id = (uint8_t)atoi(t_node);
+      if (n_id >= 1 && n_id <= MAX_DIAG_NODES) {
+        remote_nodes[n_id].night_mode = st;
+        pjon_send_night_mode(n_id, st);
+      }
+    }
+    cl.print(F("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"));
+    cl.flush();
+    cl.stop();
+    return;
+  }
+
+  if (strncmp(path, "/api/clean_mode", 15) == 0) {
+    char t_node[16] = "1";
+    char t_st[8] = "1";
+    char *q = strchr(path, '?');
+    if (q) {
+      get_form_value(q + 1, "node", t_node, sizeof(t_node));
+      get_form_value(q + 1, "state", t_st, sizeof(t_st));
+    }
+    bool st = (atoi(t_st) != 0);
+    uint8_t n_id = (uint8_t)atoi(t_node);
+    if (n_id >= 1 && n_id <= MAX_DIAG_NODES) {
+      remote_nodes[n_id].clean_mode = st;
+      pjon_send_clean_mode(n_id, st);
+    }
+    cl.print(F("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"));
+    cl.flush();
+    cl.stop();
+    return;
+  }
+
   if (strcmp(path, "/api/status") == 0) {
     // Risposta costruita in un unico buffer e inviata con una sola write
     static char sb[3072];
@@ -722,12 +773,17 @@ void web_server_handle() {
       dtostrf(lm75_get_temp(), 1, 1, tbuf);
     else
       strcpy(tbuf, "null");
-    APP(PSTR("{\"mqtt\":%d,\"scan\":%d,\"prx\":%lu,\"ptx\":%lu,\"mrx\":%lu,\"mtx\":%lu,"
+    char time_str[24];
+    ntp_get_datetime_str(time_str, sizeof(time_str));
+    uint8_t health = get_rs485_bus_health_pct();
+    APP(PSTR("{\"mqtt\":%d,\"scan\":%d,\"prx\":%lu,\"ptx\":%lu,\"perr\":%lu,\"health\":%u,\"time\":\"%s\",\"mrx\":%lu,\"mtx\":%lu,"
              "\"rt\":\"%s\",\"rp\":\"%s\",\"tt\":\"%s\",\"tp\":\"%s\",\"temp\":"
-             "%s,\"nds\":["),
+             "%s,\"nm_all\":%d,\"nds\":["),
         client.connected() ? 1 : 0, node_diag_is_scanning() ? 1 : 0, pjon_packets_rx, pjon_packets_tx,
+        pjon_packets_err, health, time_str,
         mqtt_messages_rx, mqtt_messages_tx, last_mqtt_rx_topic,
-        last_mqtt_rx_payload, last_mqtt_tx_topic, last_mqtt_tx_payload, tbuf);
+        last_mqtt_rx_payload, last_mqtt_tx_topic, last_mqtt_tx_payload, tbuf,
+        master_night_mode ? 1 : 0);
     bool fst = true;
     for (uint8_t i = 1; i <= MAX_DIAG_NODES; i++) {
       if (remote_nodes[i].active) {
@@ -738,7 +794,7 @@ void web_server_handle() {
           strcpy(nt_str, "null");
         unsigned long cur_now = millis();
         unsigned long sec_ago = (remote_nodes[i].last_seen > 0) ? (cur_now - remote_nodes[i].last_seen) / 1000 : 999999;
-        APP(PSTR("%s{\"i\":%u,\"o\":%d,\"b\":%u,\"r\":%lu,\"s\":1,\"t\":%s,\"q\":%u,\"a\":%u,\"f\":%u,\"l\":%lu,\"bl\":%u,\"lm\":%u,\"hc\":%d}"),
+        APP(PSTR("%s{\"i\":%u,\"o\":%d,\"b\":%u,\"r\":%lu,\"s\":1,\"t\":%s,\"q\":%u,\"a\":%u,\"f\":%u,\"l\":%lu,\"bl\":%u,\"lm\":%u,\"hc\":%d,\"nm\":%d,\"cm\":%d}"),
             fst ? "" : ",", i,
             remote_nodes[i].online ? 1 : 0,
             remote_nodes[i].bus_id ? remote_nodes[i].bus_id : 1,
@@ -750,19 +806,21 @@ void web_server_handle() {
             sec_ago,
             remote_nodes[i].backlight_pct,
             remote_nodes[i].led_mode,
-            remote_nodes[i].has_config ? 1 : 0);
+            remote_nodes[i].has_config ? 1 : 0,
+            remote_nodes[i].night_mode ? 1 : 0,
+            remote_nodes[i].clean_mode ? 1 : 0);
         fst = false;
       }
     }
     APP(PSTR("],\"rxh\":["));
     for (uint8_t q = 0; q < mqtt_rx_history_count; q++) {
-      APP(PSTR("%s{\"t\":\"%s\",\"p\":\"%s\"}"), q == 0 ? "" : ",",
-          mqtt_rx_history[q].topic, mqtt_rx_history[q].payload);
+      APP(PSTR("%s{\"tm\":\"%s\",\"t\":\"%s\",\"p\":\"%s\"}"), q == 0 ? "" : ",",
+          mqtt_rx_history[q].time, mqtt_rx_history[q].topic, mqtt_rx_history[q].payload);
     }
     APP(PSTR("],\"txh\":["));
     for (uint8_t q = 0; q < mqtt_tx_history_count; q++) {
-      APP(PSTR("%s{\"t\":\"%s\",\"p\":\"%s\"}"), q == 0 ? "" : ",",
-          mqtt_tx_history[q].topic, mqtt_tx_history[q].payload);
+      APP(PSTR("%s{\"tm\":\"%s\",\"t\":\"%s\",\"p\":\"%s\"}"), q == 0 ? "" : ",",
+          mqtt_tx_history[q].time, mqtt_tx_history[q].topic, mqtt_tx_history[q].payload);
     }
     APP(PSTR("],\"dbg\":{\"err\":%lu,\"lost\":%lu,\"full\":%lu,\"oth\":%lu,"
              "\"sfail\":%lu,\"btn\":%lu,\"k\":%lu,\"rx1\":%lu,\"rx2\":%lu,"
@@ -949,6 +1007,27 @@ void web_server_handle() {
   wp(cl, mqtt_messages_rx);
   wp(cl, F(" / "));
   wp(cl, mqtt_messages_tx);
+  wp_ln(cl, F("</div></div>"));
+
+  // Salute Bus RS485
+  uint8_t b_health = get_rs485_bus_health_pct();
+  wp(cl, F("<div class='stat-box'>Salute Bus RS485<div id='bus_health' class='stat-val' style='color:"));
+  if (b_health >= 95) wp(cl, F("#22c55e"));
+  else if (b_health >= 80) wp(cl, F("#eab308"));
+  else wp(cl, F("#ef4444"));
+  wp(cl, F("'>"));
+  wp(cl, b_health);
+  wp(cl, F("% ("));
+  if (b_health >= 95) wp(cl, F("Ottimo"));
+  else if (b_health >= 80) wp(cl, F("Discreto"));
+  else wp(cl, F("Disturbi"));
+  wp_ln(cl, F(")</div></div>"));
+
+  // Data e Ora NTP
+  char dt_buf[24];
+  ntp_get_datetime_str(dt_buf, sizeof(dt_buf));
+  wp(cl, F("<div class='stat-box'>Data e Ora Gateway<div id='ntp_time' class='stat-val' style='font-size:16px;color:#38bdf8'>"));
+  wp(cl, dt_buf);
   wp_ln(cl, F("</div></div>"));
 
   wp_ln(cl, F("</div></div>")); // Chiude stat-grid e card
@@ -1424,14 +1503,16 @@ void web_server_handle() {
       cl,
       F("var s=document.getElementById('mqtt_stats');if(s)s.innerText=d.mrx+' "
         "/ '+d.mtx;"));
+  wp_ln(cl, F("var bh=document.getElementById('bus_health');if(bh&&d.health!==undefined){bh.innerText=d.health+'% '+(d.health>=95?'(Ottimo)':(d.health>=80?'(Discreto)':'(Disturbi)'));bh.style.color=d.health>=95?'#22c55e':(d.health>=80?'#eab308':'#ef4444');}"));
+  wp_ln(cl, F("var ntp=document.getElementById('ntp_time');if(ntp&&d.time)ntp.innerText=d.time;"));
   wp_ln(cl,
         F("var "
           "te=document.getElementById('lm75_val');if(te){if(d.temp!==null&&d."
           "temp!==undefined)te.innerHTML=d.temp.toFixed(1)+' &deg;C';else "
           "te.innerHTML='<span style=\"color:#94a3b8\">N.D.</span>';}"));
-  wp_ln(cl, F("if(d.rxh&&d.rxh.length>0){var rh='';d.rxh.forEach(function(m){rh+='<div style=\"padding:4px 0;border-bottom:1px solid #1e293b\"><div style=\"display:flex;justify-content:space-between;align-items:center\"><b style=\"color:#38bdf8;font-size:12px\">'+descMsg(m.t,m.p,true)+'</b><span class=\"badge\" style=\"padding:1px 6px;font-size:11px;'+bgMsg(m.p)+'\">'+m.p+'</span></div><div style=\"color:#64748b;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px\"><span style=\"color:#475569\">topic:</span> '+m.t+'</div></div>';});var rbox=document.getElementById('mqtt_rx_list');if(rbox)rbox.innerHTML=rh;}"));
+  wp_ln(cl, F("if(d.rxh&&d.rxh.length>0){var rh='';d.rxh.forEach(function(m){rh+='<div style=\"padding:4px 0;border-bottom:1px solid #1e293b\"><div style=\"display:flex;justify-content:space-between;align-items:center\"><span style=\"display:flex;align-items:center;gap:6px\"><span style=\"color:#64748b;font-size:11px\">['+(m.tm||'--:--')+']</span><b style=\"color:#38bdf8;font-size:12px\">'+descMsg(m.t,m.p,true)+'</b></span><span class=\"badge\" style=\"padding:1px 6px;font-size:11px;'+bgMsg(m.p)+'\">'+m.p+'</span></div><div style=\"color:#64748b;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px\"><span style=\"color:#475569\">topic:</span> '+m.t+'</div></div>';});var rbox=document.getElementById('mqtt_rx_list');if(rbox)rbox.innerHTML=rh;}"));
   wp_ln(cl, F("var rxb=document.getElementById('mrx_cnt_badge');if(rxb)rxb.innerText=d.mrx+' messaggi';"));
-  wp_ln(cl, F("if(d.txh&&d.txh.length>0){var th='';d.txh.forEach(function(m){th+='<div style=\"padding:4px 0;border-bottom:1px solid #1e293b\"><div style=\"display:flex;justify-content:space-between;align-items:center\"><b style=\"color:#38bdf8;font-size:12px\">'+descMsg(m.t,m.p,false)+'</b><span class=\"badge\" style=\"padding:1px 6px;font-size:11px;'+bgMsg(m.p)+'\">'+m.p+'</span></div><div style=\"color:#64748b;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px\"><span style=\"color:#475569\">topic:</span> '+m.t+'</div></div>';});var tbox=document.getElementById('mqtt_tx_list');if(tbox)tbox.innerHTML=th;}"));
+  wp_ln(cl, F("if(d.txh&&d.txh.length>0){var th='';d.txh.forEach(function(m){th+='<div style=\"padding:4px 0;border-bottom:1px solid #1e293b\"><div style=\"display:flex;justify-content:space-between;align-items:center\"><span style=\"display:flex;align-items:center;gap:6px\"><span style=\"color:#64748b;font-size:11px\">['+(m.tm||'--:--')+']</span><b style=\"color:#38bdf8;font-size:12px\">'+descMsg(m.t,m.p,false)+'</b></span><span class=\"badge\" style=\"padding:1px 6px;font-size:11px;'+bgMsg(m.p)+'\">'+m.p+'</span></div><div style=\"color:#64748b;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px\"><span style=\"color:#475569\">topic:</span> '+m.t+'</div></div>';});var tbox=document.getElementById('mqtt_tx_list');if(tbox)tbox.innerHTML=th;}"));
   wp_ln(cl, F("var txb=document.getElementById('mtx_cnt_badge');if(txb)txb.innerText=d.mtx+' messaggi';"));
   wp_ln(cl, F("if(d.nds){"));
   wp_ln(cl, F("var csel=document.getElementById('cfg_node');if(csel){var seen={};for(var q=0;q<csel.options.length;q++)seen[csel.options[q].value]=true;d.nds.forEach(function(n){if(n.s&&!seen[''+n.i]){var opt=document.createElement('option');opt.value=n.i;opt.innerText='Nodo '+n.i+' (Bus '+(n.b||1)+')';csel.appendChild(opt);seen[''+n.i]=true;}});}"));

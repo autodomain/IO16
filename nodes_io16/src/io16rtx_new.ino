@@ -57,6 +57,18 @@ uint8_t config_led_mode = 1;
 
 bool led_toggle_state[8] = {false};
 
+// Funzionalità Avanzate: Modalità Notte & Auto-Dimming (Wake-on-Touch), Modalità Pulizia (Child Lock)
+bool night_mode = false;
+unsigned long wake_touch_timer = 0;
+const unsigned long WAKE_TOUCH_INTERVAL = 10000; // 10 secondi di retroilluminazione piena al tocco
+
+bool clean_mode = false;
+unsigned long clean_mode_timer = 0;
+const unsigned long CLEAN_MODE_DURATION = 60000; // 60 secondi di blocco comandi per pulizia
+unsigned long clean_hold_start = 0;
+
+unsigned long led_flash_until[8] = {0}; // Timer per feedback flash di conferma pressione (80ms)
+
 void save_eeprom_config() {
   EEPROM.update(EEPROM_ADDR_MAGIC, EEPROM_MAGIC);
   EEPROM.update(EEPROM_ADDR_BACKLIGHT, config_backlight_pct);
@@ -82,6 +94,20 @@ uint8_t get_standby_duty() {
   if (d < 1) d = 1;
   if (d > 16) d = 16;
   return (uint8_t)d;
+}
+
+uint8_t get_current_backlight_duty() {
+  uint8_t base_duty = get_standby_duty();
+  if (!night_mode) {
+    return base_duty;
+  }
+  // Se siamo in Night Mode, controlla se c'è Wake-on-Touch attivo
+  unsigned long now = millis();
+  if (wake_touch_timer > 0 && (now - wake_touch_timer < WAKE_TOUCH_INTERVAL)) {
+    return base_duty; // Riporta a piena retroilluminazione temporizzata al tocco
+  }
+  // In Night Mode a riposo: se base_duty > 1, riduci a 1 (soffuso minimo ~6%), altrimenti 0 (spento totale)
+  return (base_duty > 1) ? 1 : 0;
 }
 
 // Pin LED RX e Gateway
@@ -204,10 +230,40 @@ void lm75_loop() {
 }
 
 void update_led_states() {
-  uint8_t standby_duty = get_standby_duty();
   unsigned long now = millis();
 
+  // 1. Gestione Modalità Pulizia (Cleaning Mode): lampeggio alternato e blocco
+  if (clean_mode) {
+    if (now - clean_mode_timer >= CLEAN_MODE_DURATION) {
+      clean_mode = false;
+      clean_mode_timer = 0;
+    } else {
+      // Lampeggio alternato ritmico ogni 250ms: LED 1,3,5,7 poi 2,4,6,8
+      bool phase = ((now / 250) % 2) == 0;
+      for (uint8_t i = 0; i < 8; i++) {
+        if ((i % 2 == 0 && phase) || (i % 2 != 0 && !phase)) {
+          led_duty[i] = 16;
+        } else {
+          led_duty[i] = 0;
+        }
+      }
+      return;
+    }
+  }
+
+  uint8_t standby_duty = get_current_backlight_duty();
+
   for (uint8_t i = 0; i < 8; i++) {
+    // Feedback flash di conferma tocco (80ms a piena luce)
+    if (led_flash_until[i] > 0) {
+      if (now < led_flash_until[i]) {
+        led_duty[i] = 16;
+        continue;
+      } else {
+        led_flash_until[i] = 0;
+      }
+    }
+
     bool active = false;
 
     if (config_led_mode == 0) {
@@ -351,6 +407,43 @@ void receiver_function(uint8_t *payload, uint16_t length, const PJON_Packet_Info
     return;
   }
 
+  // 5b. Comando Modalita Notte ('N' o 'n') -> 'N' ['0'|'1'|'?']
+  if (length >= 1 && (payload[0] == 'N' || payload[0] == 'n')) {
+    if (length >= 2) {
+      if (payload[1] == '1') {
+        night_mode = true;
+      } else if (payload[1] == '0') {
+        night_mode = false;
+        wake_touch_timer = 0;
+      }
+    }
+    update_led_states();
+    char n_msg[3] = { 'N', night_mode ? '1' : '0', '\0' };
+    bus.set_acknowledge(false);
+    bus.send(gw_address, n_msg, 2);
+    digitalWrite(led_rx, LOW);
+    return;
+  }
+
+  // 5c. Comando Modalita Pulizia / Blocco Tasti ('K' o 'k') -> 'K' ['0'|'1'|'?']
+  if (length >= 1 && (payload[0] == 'K' || payload[0] == 'k')) {
+    if (length >= 2) {
+      if (payload[1] == '1') {
+        clean_mode = true;
+        clean_mode_timer = millis();
+      } else if (payload[1] == '0') {
+        clean_mode = false;
+        clean_mode_timer = 0;
+      }
+    }
+    update_led_states();
+    char k_msg[3] = { 'K', clean_mode ? '1' : '0', '\0' };
+    bus.set_acknowledge(false);
+    bus.send(gw_address, k_msg, 2);
+    digitalWrite(led_rx, LOW);
+    return;
+  }
+
   // 6. Comando Standard: payload[0] = led ('0'..'8'), payload[1] = stato ('0'..'1')
   if (length >= 2) {
     uint8_t l = payload[0];
@@ -377,6 +470,12 @@ void receiver_function(uint8_t *payload, uint16_t length, const PJON_Packet_Info
 void error_handler(uint8_t code, uint16_t data, void *custom_pointer) {}
 
 void send_button_event(char btn_code, uint8_t led_idx, bool long_press = false) {
+  // Risveglio temporizzato (Wake-on-touch) per 10s se era in Modalita Notte
+  wake_touch_timer = millis();
+
+  // Feedback visivo immediato: flash di conferma 80ms sul LED toccato
+  led_flash_until[led_idx] = millis() + 80;
+
   digitalWrite(led_rx, HIGH);
   bus.set_acknowledge(false);
   char msg[2] = { btn_code, '\0' };
@@ -387,16 +486,16 @@ void send_button_event(char btn_code, uint8_t led_idx, bool long_press = false) 
     led_timer[led_idx] = millis();
     if (long_press) {
       led_duty[led_idx] = 0; // Breve stacco visivo per conferma long press
-      delay(50);
+      delay(40);
     }
     led_duty[led_idx] = 16;
   } else if (config_led_mode == 2) {
     // Mode 2: Toggle Bistabile Locale
     led_toggle_state[led_idx] = !led_toggle_state[led_idx];
-    led_duty[led_idx] = led_toggle_state[led_idx] ? 16 : get_standby_duty();
+    led_duty[led_idx] = led_toggle_state[led_idx] ? 16 : get_current_backlight_duty();
   }
   // In Mode 0 (Solo Remoto) non si accende localmente, attende comando da Gateway/HA.
-  // In Mode 3 (Momentaneo) la gestione è dinamica su buttons[i].isPressed() in update_led_states().
+  // In Mode 3 (Momentaneo) la gestione e dinamica su buttons[i].isPressed() in update_led_states().
 
   digitalWrite(led_rx, LOW);
 }
@@ -470,19 +569,39 @@ void loop() {
   // Reset Watchdog ad ogni ciclo
   wdt_reset();
 
-  // Scansione e gestione eventi pulsanti
-  for (uint8_t i = 0; i < 8; i++) {
-    buttons[i].update();
+  // Gestione attivazione/disattivazione Modalita Pulizia: pressione contemporanea Tasto 1 (Pin 7) e Tasto 8 (Pin 0) per 3 secondi
+  if (digitalRead(7) == LOW && digitalRead(0) == LOW) {
+    if (clean_hold_start == 0) {
+      clean_hold_start = millis();
+    } else if (millis() - clean_hold_start >= 3000) {
+      clean_mode = !clean_mode;
+      clean_mode_timer = clean_mode ? millis() : 0;
+      clean_hold_start = 0;
+      // Flash di conferma visiva su tutti i LED
+      for (uint8_t k = 0; k < 8; k++) led_duty[k] = 16;
+      delay(200);
+      for (uint8_t k = 0; k < 8; k++) led_duty[k] = 0;
+      delay(100);
+    }
+  } else {
+    clean_hold_start = 0;
+  }
 
-    if (buttons[i].isSingleClick()) {
-      // Click breve: 'A'..'H' (corrisponde a Button 1..8 su Home Assistant)
-      send_button_event('A' + i, i, false);
-    } else if (buttons[i].isLongClick()) {
-      // Long press: 'I'..'P' (corrisponde a Button 9..16 su Home Assistant)
-      send_button_event('I' + i, i, true);
-    } else if (buttons[i].isDoubleClick()) {
-      // Double click: 'Q'..'X' (corrisponde a Button 17..24 su Home Assistant)
-      send_button_event('Q' + i, i, false);
+  // Scansione e gestione eventi pulsanti (solo se NON in modalita pulizia)
+  if (!clean_mode) {
+    for (uint8_t i = 0; i < 8; i++) {
+      buttons[i].update();
+
+      if (buttons[i].isSingleClick()) {
+        // Click breve: 'A'..'H' (corrisponde a Button 1..8 su Home Assistant)
+        send_button_event('A' + i, i, false);
+      } else if (buttons[i].isLongClick()) {
+        // Long press: 'I'..'P' (corrisponde a Button 9..16 su Home Assistant)
+        send_button_event('I' + i, i, true);
+      } else if (buttons[i].isDoubleClick()) {
+        // Double click: 'Q'..'X' (corrisponde a Button 17..24 su Home Assistant)
+        send_button_event('Q' + i, i, false);
+      }
     }
   }
 
