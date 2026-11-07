@@ -4,6 +4,7 @@
 #include "config.h"
 #include "web_server.h"
 #include "lm75_sensor.h"
+#include "node_diagnostics.h"
 
 extern PubSubClient client;
 
@@ -137,11 +138,11 @@ void ha_discovery_publish_all() {
     client.publish(tbuf, j_temp, true);
     delay(20);
 
-    // 6. Registra i nodi client configurati (fino a 63 nodi)
-    uint8_t count = config.ha_nodes_count;
-    if (count > 63) count = 63;
-    for (uint8_t n = 1; n <= count; n++) {
-        ha_discovery_publish_node(n);
+    // 6. Registra tutti i nodi client registrati e memorizzati in EEPROM (fino a 63 nodi)
+    for (uint8_t n = 1; n <= 63; n++) {
+        if (remote_nodes[n].active) {
+            ha_discovery_publish_node(n);
+        }
     }
 }
 

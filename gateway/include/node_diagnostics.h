@@ -25,6 +25,8 @@ extern RemoteNodeInfo remote_nodes[MAX_DIAG_NODES + 1];
 
 void node_diag_init();
 void node_diag_mark_seen(uint8_t node_id, uint8_t bus_id = 1);
+void node_diag_save_node(uint8_t node_id);
+void node_diag_save_all();
 void node_diag_set_temp(uint8_t node_id, float temp_c);
 void node_diag_record_attempts(uint8_t node_id, uint8_t attempts, bool success);
 void node_diag_loop();

@@ -1,29 +1,104 @@
 #include "node_diagnostics.h"
 #include <PubSubClient.h>
+#include <EEPROM.h>
 #include "config.h"
 
 extern PubSubClient client;
 extern void pjon_send_ping(uint8_t addr);
+extern uint64_t known_nodes_mask;
 
 RemoteNodeInfo remote_nodes[MAX_DIAG_NODES + 1];
 
+#define NODE_STORAGE_MAGIC 0x4E4F4445 // "NODE"
+#define NODE_STORAGE_ADDR 256
+
+struct NodeRegistryStorage {
+    uint32_t magic;
+    uint64_t registered_mask; // 64 bit: bit i = 1 se il nodo i è registrato (1..63)
+    uint8_t bus_id[64];       // Bus RS485 (1 o 2)
+    uint8_t backlight[64];    // Backlight (0..100)
+    uint8_t led_mode[64];     // Modo LED (0..3)
+};
+
+static NodeRegistryStorage node_storage;
+
+static void node_storage_write() {
+    EEPROM.put(NODE_STORAGE_ADDR, node_storage);
+}
+
+void node_diag_save_node(uint8_t node_id) {
+    if (node_id < 1 || node_id > MAX_DIAG_NODES) return;
+    node_storage.magic = NODE_STORAGE_MAGIC;
+    node_storage.registered_mask |= ((uint64_t)1 << node_id);
+    node_storage.bus_id[node_id] = remote_nodes[node_id].bus_id ? remote_nodes[node_id].bus_id : 1;
+    node_storage.backlight[node_id] = remote_nodes[node_id].backlight_pct;
+    node_storage.led_mode[node_id] = remote_nodes[node_id].led_mode;
+    node_storage_write();
+}
+
+void node_diag_save_all() {
+    node_storage.magic = NODE_STORAGE_MAGIC;
+    for (uint8_t i = 1; i <= MAX_DIAG_NODES; i++) {
+        if (remote_nodes[i].active) {
+            node_storage.registered_mask |= ((uint64_t)1 << i);
+            node_storage.bus_id[i] = remote_nodes[i].bus_id ? remote_nodes[i].bus_id : 1;
+            node_storage.backlight[i] = remote_nodes[i].backlight_pct;
+            node_storage.led_mode[i] = remote_nodes[i].led_mode;
+        }
+    }
+    node_storage_write();
+}
+
 static unsigned long last_check_time = 0;
 static unsigned long last_ping_time = 0;
+static bool startup_ping_active = false;
+static uint8_t startup_ping_cur = 1;
+static unsigned long last_startup_ping = 0;
 
 void node_diag_init() {
     memset(remote_nodes, 0, sizeof(remote_nodes));
     
-    // Attiva i nodi preconfigurati
-    uint8_t count = config.ha_nodes_count;
-    if (count > MAX_DIAG_NODES) count = MAX_DIAG_NODES;
-    for (uint8_t i = 1; i <= count; i++) {
-        remote_nodes[i].active = true;
-        remote_nodes[i].online = false; // In attesa del primo heartbeat
-        remote_nodes[i].last_seen = 0;
-        remote_nodes[i].backlight_pct = 12;
-        remote_nodes[i].led_mode = 1;
-        remote_nodes[i].has_config = false;
+    // Carica registro interfacce persistenti da EEPROM
+    EEPROM.get(NODE_STORAGE_ADDR, node_storage);
+    if (node_storage.magic == NODE_STORAGE_MAGIC) {
+        for (uint8_t i = 1; i <= MAX_DIAG_NODES; i++) {
+            if (node_storage.registered_mask & ((uint64_t)1 << i)) {
+                remote_nodes[i].active = true;
+                remote_nodes[i].online = false; // Sarà confermato online dal ping di verifica immediato
+                remote_nodes[i].bus_id = node_storage.bus_id[i] ? node_storage.bus_id[i] : 1;
+                remote_nodes[i].backlight_pct = node_storage.backlight[i] ? node_storage.backlight[i] : 12;
+                remote_nodes[i].led_mode = node_storage.led_mode[i];
+                remote_nodes[i].has_config = true;
+                remote_nodes[i].last_seen = 0;
+                known_nodes_mask |= ((uint64_t)1 << i);
+            }
+        }
+    } else {
+        // Prima inizializzazione assoluta (nessun nodo salvato)
+        memset(&node_storage, 0, sizeof(node_storage));
+        node_storage.magic = NODE_STORAGE_MAGIC;
+        uint8_t count = config.ha_nodes_count;
+        if (count > MAX_DIAG_NODES) count = MAX_DIAG_NODES;
+        for (uint8_t i = 1; i <= count; i++) {
+            remote_nodes[i].active = true;
+            remote_nodes[i].online = false;
+            remote_nodes[i].bus_id = 1;
+            remote_nodes[i].backlight_pct = 12;
+            remote_nodes[i].led_mode = 1;
+            remote_nodes[i].has_config = false;
+            node_storage.registered_mask |= ((uint64_t)1 << i);
+            node_storage.bus_id[i] = 1;
+            node_storage.backlight[i] = 12;
+            node_storage.led_mode[i] = 1;
+            known_nodes_mask |= ((uint64_t)1 << i);
+        }
+        node_storage_write();
     }
+
+    // Abilita la sequenza di interrogazione istantanea all'avvio
+    startup_ping_active = true;
+    startup_ping_cur = 1;
+    last_startup_ping = 0;
 }
 
 static void publish_node_ha_status(uint8_t node_id, bool is_online) {
@@ -87,11 +162,19 @@ void node_diag_record_attempts(uint8_t node_id, uint8_t attempts, bool success) 
 void node_diag_mark_seen(uint8_t node_id, uint8_t bus_id) {
     if (node_id < 1 || node_id > MAX_DIAG_NODES) return;
 
+    bool was_unregistered = !(node_storage.registered_mask & ((uint64_t)1 << node_id));
+
     remote_nodes[node_id].active = true;
     remote_nodes[node_id].bus_id = bus_id;
     remote_nodes[node_id].last_seen = millis();
     remote_nodes[node_id].packets_rx++;
     remote_nodes[node_id].ping_fails = 0;
+    
+    // Se non era ancora registrato in EEPROM, memorizzalo immediatamente in modo permanente!
+    if (was_unregistered) {
+        node_diag_save_node(node_id);
+        known_nodes_mask |= ((uint64_t)1 << node_id);
+    }
     
     // Se la qualita' era azzerata (era offline o appena avviato):
     if (remote_nodes[node_id].quality == 0) {
@@ -136,6 +219,12 @@ bool node_diag_is_scanning() {
 
 void node_diag_clear_all() {
     is_scanning = false;
+    startup_ping_active = false;
+    memset(&node_storage, 0, sizeof(node_storage));
+    node_storage.magic = NODE_STORAGE_MAGIC;
+    node_storage_write();
+    known_nodes_mask = 0;
+
     for (uint8_t i = 1; i <= MAX_DIAG_NODES; i++) {
         remote_nodes[i].active = false;
         remote_nodes[i].online = false;
@@ -181,6 +270,23 @@ bool ota_is_active();
 void node_diag_loop() {
     if (ota_is_active()) return;
     unsigned long now = millis();
+
+    // 0. Sequenza di verifica istantanea all'avvio per tutti i nodi registrati in EEPROM
+    if (startup_ping_active && (now >= 500) && (now - last_startup_ping >= 40)) {
+        last_startup_ping = now;
+        bool found = false;
+        while (startup_ping_cur <= MAX_DIAG_NODES) {
+            uint8_t nid = startup_ping_cur++;
+            if (remote_nodes[nid].active) {
+                pjon_send_ping(nid);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            startup_ping_active = false;
+        }
+    }
 
     // Avanzamento Discovery Scan (un nodo ogni 60 ms)
     if (is_scanning && (now - last_scan_step >= 60)) {

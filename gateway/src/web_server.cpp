@@ -662,6 +662,7 @@ void web_server_handle() {
           while (millis() - t0 < 40) pjon_service();
         }
       }
+      node_diag_save_all();
       pjon_send_config_set(0, bl, md);
       unsigned long tb0 = millis();
       while (millis() - tb0 < 60) pjon_service();
@@ -687,6 +688,7 @@ void web_server_handle() {
         remote_nodes[n_id].backlight_pct = bl;
         remote_nodes[n_id].led_mode = md;
         remote_nodes[n_id].has_config = true;
+        node_diag_save_node(n_id);
       } else {
         pjon_send_config_req(n_id);
         unsigned long t0 = millis();
@@ -728,7 +730,7 @@ void web_server_handle() {
         last_mqtt_rx_payload, last_mqtt_tx_topic, last_mqtt_tx_payload, tbuf);
     bool fst = true;
     for (uint8_t i = 1; i <= MAX_DIAG_NODES; i++) {
-      if (remote_nodes[i].active && (remote_nodes[i].last_seen > 0 || remote_nodes[i].online)) {
+      if (remote_nodes[i].active) {
         char nt_str[10];
         if (remote_nodes[i].has_temp && remote_nodes[i].temp > 0.0f)
           dtostrf(remote_nodes[i].temp, 1, 1, nt_str);
@@ -736,12 +738,11 @@ void web_server_handle() {
           strcpy(nt_str, "null");
         unsigned long cur_now = millis();
         unsigned long sec_ago = (remote_nodes[i].last_seen > 0) ? (cur_now - remote_nodes[i].last_seen) / 1000 : 999999;
-        APP(PSTR("%s{\"i\":%u,\"o\":%d,\"b\":%u,\"r\":%lu,\"s\":%d,\"t\":%s,\"q\":%u,\"a\":%u,\"f\":%u,\"l\":%lu,\"bl\":%u,\"lm\":%u,\"hc\":%d}"),
+        APP(PSTR("%s{\"i\":%u,\"o\":%d,\"b\":%u,\"r\":%lu,\"s\":1,\"t\":%s,\"q\":%u,\"a\":%u,\"f\":%u,\"l\":%lu,\"bl\":%u,\"lm\":%u,\"hc\":%d}"),
             fst ? "" : ",", i,
             remote_nodes[i].online ? 1 : 0,
             remote_nodes[i].bus_id ? remote_nodes[i].bus_id : 1,
             (unsigned long)remote_nodes[i].packets_rx,
-            (remote_nodes[i].last_seen > 0) ? 1 : 0,
             nt_str,
             remote_nodes[i].quality,
             remote_nodes[i].attempts,
@@ -1080,17 +1081,14 @@ void web_server_handle() {
       wp(cl, F(": ONLINE (Bus "));
       wp(cl, remote_nodes[i].bus_id ? remote_nodes[i].bus_id : 1);
       wp(cl, F(")'"));
-    } else if (remote_nodes[i].active && remote_nodes[i].last_seen > 0) {
+    } else if (remote_nodes[i].active) {
       wp(cl, F("#ef4444;background:#dc2626;color:#fff' title='Nodo "));
       wp(cl, i);
       wp(cl, F(": OFFLINE'"));
-      wp(cl, F(": OFFLINE (Disconnesso)'"));
     } else {
-      wp(cl, F("#334155;background:#1e293b;color:#64748b;opacity:0.6' "
-               "title='Nodo "));
+      wp(cl, F("#334155;background:#1e293b;color:#64748b;opacity:0.6' title='Nodo "));
       wp(cl, i);
-      wp(cl, F(": Inattivo'"));
-      wp(cl, F(": Non trovato'"));
+      wp(cl, F(": Non registrato'"));
     }
     wp(cl, F(">"));
     wp(cl, i);
@@ -1098,7 +1096,7 @@ void web_server_handle() {
   }
   wp_ln(cl, F("</div>"));
 
-  // Tabella dettagliata: SOLO ED ESCLUSIVAMENTE I NODI CONTATTATI
+  // Tabella dettagliata: SOLO ED ESCLUSIVAMENTE I NODI REGISTRATI
   wp_ln(
       cl,
       F("<div style='display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px'>"
@@ -1114,7 +1112,7 @@ void web_server_handle() {
   bool any_active = false;
   unsigned long cur_now = millis();
   for (uint8_t i = 1; i <= MAX_DIAG_NODES; i++) {
-    if (!remote_nodes[i].active || remote_nodes[i].last_seen == 0)
+    if (!remote_nodes[i].active)
       continue;
     any_active = true;
 
