@@ -148,5 +148,19 @@ Il Gateway pubblica e sottoscrive i seguenti topic con prefisso configurabile (d
 
 ---
 
+## 🏆 Ringraziamenti & Attribuzioni (Credits & Acknowledgements)
+
+Questo progetto utilizza ed è basato sul framework e protocollo di rete open-source **PJON® (Pjon Network Protocol)**:
+- **Autore e Ideatore di PJON**: **Giovanni Blu Mitolo** ([@gioblu](https://github.com/gioblu))
+- **Repository Ufficiale PJON**: [https://github.com/gioblu/PJON](https://github.com/gioblu/PJON)
+- **Sito Web Ufficiale**: [https://www.pjon.org](https://www.pjon.org)
+- **Licenza PJON**: Rilasciato sotto licenza [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+
+Un ringraziamento speciale a Giovanni Blu Mitolo e a tutta la community di PJON per aver sviluppato un protocollo di comunicazione multi-master, multi-media e fault-tolerant eccezionale, che rende possibili architetture robuste, reattive e scalabili su bus fisici come RS485.
+
+---
+
 ## 📜 Licenza
-Progetto distribuito per automazione e domotica ad alta affidabilità su protocollo PJON. Libero per utilizzi personali e commerciali con citazione dell'autore.
+Progetto distribuito per automazione e domotica ad alta affidabilità. Libero per utilizzi personali e commerciali con citazione dell'autore.  
+PJON® è un marchio e software protetto da copyright di Giovanni Blu Mitolo.
+

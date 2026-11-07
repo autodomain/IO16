@@ -353,4 +353,16 @@ Nei moduli equipaggiati con sensore digitale LM75 sulle linee I2C (PC0/Pin 16 pe
 | **Il tempo di attività rimaneva bloccato** | Firmware Gateway o script pagina non aggiornato. | Aggiornare il Gateway alla release corrente; il contatore incrementa in secondi reali (`X s fa`) ad ogni ciclo di polling JS. |
 
 ---
+---
+
+## 8. Ringraziamenti & Attribuzioni
+
+Questo ecosistema si basa sul protocollo di comunicazione open-source **PJON® (Pjon Network Protocol)**:
+- **Autore**: **Giovanni Blu Mitolo** ([@gioblu](https://github.com/gioblu))
+- **Repository Ufficiale**: [https://github.com/gioblu/PJON](https://github.com/gioblu/PJON)
+- **Sito Ufficiale**: [https://www.pjon.org](https://www.pjon.org)
+- **Licenza**: Rilasciato sotto licenza [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+
+---
+
 *Documentazione tecnica e manuale operativo v2.1 per Gateway PJON Dual Bus & Moduli IO16.*
