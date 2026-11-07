@@ -900,7 +900,7 @@ void web_server_handle() {
               "Gateway</title>"));
   send_css(cl);
   wp_ln(cl, F("</head><body><div class='wrap'>"));
-  wp_ln(cl, F("<h1><span>Gateway MQTT &mdash; ATmega128</span><a href='/ota' "
+  wp_ln(cl, F("<h1><span>Gateway MQTT &mdash; ATmega128 <small style='font-size:12px;background:#f59e0b;color:#000;padding:2px 7px;border-radius:10px;font-weight:bold;vertical-align:middle;margin-left:6px'>BETA</small></span><a href='/ota' "
               "class='btn' style='float:right;font-size:13px;padding:6px "
               "14px;'>Aggiornamento OTA</a></h1>"));
 

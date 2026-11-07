@@ -1,5 +1,14 @@
 # IO16 — Sistema Domotico RS485 PJON & Gateway Ethernet MQTT
 
+[![Status: Beta](https://img.shields.io/badge/status-BETA-orange.svg)](https://github.com/autodomain/IO16)
+[![Release: v2.1-beta](https://img.shields.io/badge/version-v2.1--beta-blue.svg)](https://github.com/autodomain/IO16)
+[![Protocol: PJON](https://img.shields.io/badge/protocol-PJON%20ThroughSerial-green.svg)](https://www.pjon.org)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-yellow.svg)](LICENSE)
+
+> [!WARNING]
+> **Stato del Software: Versione BETA (v2.1-beta)**  
+> Questo progetto, inclusi il firmware dei nodi, l'interfaccia web e il flasher Web OTA su RS485, è attualmente in **fase BETA attiva** (test sul campo e continuo affinamento). Feedback, test e contributi sono benvenuti!
+
 Un ecosistema domotico avanzato, robusto ed espandibile basato sul protocollo **PJON (ThroughSerial half-duplex)** su bus bilanciato **RS485** a 38400 baud, interfacciato a reti IP locali e **Home Assistant** tramite un **Gateway Ethernet MQTT** dedicato.
 
 ---

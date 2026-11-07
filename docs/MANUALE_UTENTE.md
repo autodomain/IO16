@@ -1,5 +1,7 @@
 # Manuale Utente e Guida d'Installazione
-## Ecosistema Domotico RS485 PJON & Gateway Ethernet MQTT
+## Ecosistema Domotico RS485 PJON & Gateway Ethernet MQTT (Release v2.1-beta)
+
+> **Nota di Versione**: Il software del Gateway, i firmware dei nodi e l'infrastruttura OTA sono attualmente rilasciati in versione **BETA (v2.1-beta)** per testing avanzato e validazione sul campo.
 
 ---
 
