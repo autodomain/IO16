@@ -55,7 +55,7 @@ Un ecosistema domotico avanzato, robusto ed espandibile basato sul protocollo **
 
 ---
 
-### 3. Sistema di Aggiornamento Firmware Web OTA (`/firmware`)
+### 3. Sistema di Aggiornamento Firmware Web OTA
 - **Bootloader Optiboot RS485 Personalizzato**:
   - Bootloader compatto (512 parole) conforme a **STK500v1** su UART seriale half-duplex a 38400 baud.
   - Gestione automatica del pin `DIR` (Driver Enable RS485) per commutazione RX/TX senza collisioni.
@@ -64,7 +64,7 @@ Un ecosistema domotico avanzato, robusto ed espandibile basato sul protocollo **
   - Pagina web dedicata (`/ota`) accessibile da qualsiasi browser.
   - **Aggiornamento Singolo**: selezione del nodo specifico e caricamento del file `.hex`.
   - **Aggiornamento Massivo (Batch Mass OTA)**: con un solo click e un file binario universale, il Gateway riprogramma in sequenza automatica tutti i nodi collegati sul bus.
-  - **Firmware Universale**: script `create_universal_fw.py` che genera un unico file Intel HEX contenente il codice compilato per entrambi i target MCU (`ATmega1284P` e `ATmega324PB`), selezionato dinamicamente in base alla firma hardware letta dal bootloader.
+  - **Firmware Universale**: generabile tramite lo script `nodes_io16/create_universal_fw.py`, crea un unico file Intel HEX contenente il codice compilato per entrambi i target MCU (`ATmega1284P` e `ATmega324PB`), selezionato dinamicamente in base alla firma hardware letta dal bootloader.
 
 ---
 
@@ -84,9 +84,6 @@ IO16/
 │   ├── create_universal_fw.py  # Script Python unione firmware universale multi-MCU
 │   ├── ota_flash_helper.py     # Script helper per test OTA
 │   └── platformio.ini          # Configurazione ambienti atmega1284p e atmega324pb
-│
-├── firmware/                   # Binari compilati pronti all'uso
-│   └── firmware_io16_universal.hex
 │
 ├── docs/                       # Documentazione tecnica e manuali
 │   ├── MANUALE_UTENTE.md       # Manuale completo d'uso e configurazione
